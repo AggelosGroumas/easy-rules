@@ -46,7 +46,7 @@ import static org.mockito.Mockito.*;
 public class CompositeRuleTest {
 
     @Mock
-    private BasicRule rule1, rule2;
+    private BasicRule rule1, rule2, rule3;
 
     private CompositeRule compositeRule;
 
@@ -57,8 +57,9 @@ public class CompositeRuleTest {
 
         when(rule1.evaluate()).thenReturn(true);
         when(rule2.evaluate()).thenReturn(true);
+        when(rule1.getName()).thenReturn("ruleName1");
+        when(rule2.getName()).thenReturn("ruleName2");
         when(rule2.compareTo(rule1)).thenReturn(1);
-
         compositeRule = new CompositeRule();
 
         rulesEngine = aNewRulesEngine().build();
@@ -101,6 +102,106 @@ public class CompositeRuleTest {
         verify(rule1, never()).execute();
 
         //Rule 2 should not be executed
+        verify(rule2, never()).execute();
+
+    }
+
+    @Test
+    public void compositeRuleMustNotBeExecutedIfCompositeLogicalConjunctionEvaluatesToFalse() throws Exception {
+
+        String orLogicalConjunction = "[ruleName1] || [ruleName2]";
+        String orAnotherLogicalConjunction = "([ruleName1] || [ruleName2]) && [ruleName3]";
+
+        when(rule1.evaluate()).thenReturn(false);
+        when(rule2.evaluate()).thenReturn(false);
+
+        compositeRule.addRule(rule1);
+        compositeRule.addRule(rule2);
+        compositeRule.setLogicalConjunction(orLogicalConjunction);
+
+        rulesEngine.registerRule(compositeRule);
+
+        rulesEngine.fireRules();
+
+        /*
+         * The composing rules should not be executed
+         * since false || false evaluates to FALSE
+         */
+
+        verify(rule1, never()).execute();
+        verify(rule2, never()).execute();
+
+        // testing a little more complex expression
+        when(rule2.evaluate()).thenReturn(true);
+        compositeRule.addRule(rule3);
+        compositeRule.setLogicalConjunction(orAnotherLogicalConjunction);
+        rulesEngine.fireRules();
+
+        // true && false evaluates to FALSE, so rules should not be executed
+        verify(rule1, never()).execute();
+        verify(rule2, never()).execute();
+        verify(rule3, never()).execute();
+
+    }
+
+    @Test
+    public void compositeRuleMustNotBeExecutedIfCompositeLogicalConjunctionIsInvalid() throws Exception {
+        String orLogicalConjunction = "ruleName1 || ruleName2";
+        compositeRule.addRule(rule1);
+        compositeRule.addRule(rule2);
+        compositeRule.setLogicalConjunction(orLogicalConjunction);
+
+        rulesEngine.registerRule(compositeRule);
+
+        rulesEngine.fireRules();
+
+        /*
+            Logical expression is not valid. Rule names should be enclosed in square brackets.
+         */
+        verify(rule1, never()).execute();
+        verify(rule2, never()).execute();
+    }
+
+    @Test
+    public void compositeRuleANDConjunctionAssumedIfCompositeLogicalConjunctionIsEmpty() throws Exception {
+        compositeRule.addRule(rule1);
+        compositeRule.addRule(rule2);
+        compositeRule.setLogicalConjunction(null);
+
+        rulesEngine.registerRule(compositeRule);
+
+        rulesEngine.fireRules();
+
+        /*
+            Logical expression is not valid. Rule names should be enclosed in square brackets.
+         */
+        verify(rule1).execute();
+        verify(rule2).execute();
+
+        //test with empty String as well
+        compositeRule.setLogicalConjunction("");
+        rulesEngine.fireRules();
+
+        verify(rule1).execute();
+        verify(rule2).execute();
+    }
+
+    @Test
+    public void compositeRuleMustNotBeExecutedIfRuleNameNotFoundInLogicalConjunction() throws Exception {
+        String orLogicalConjunction = "[ruleName8] || [ruleName2]";
+
+        compositeRule.addRule(rule1);
+        compositeRule.addRule(rule2);
+        compositeRule.setLogicalConjunction(orLogicalConjunction);
+
+        rulesEngine.registerRule(compositeRule);
+
+        rulesEngine.fireRules();
+
+        /*
+            Logical expression contains an unknown rule name.
+         */
+        verify(rule1, never()).execute();
         verify(rule2, never()).execute();
 
     }

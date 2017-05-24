@@ -24,13 +24,23 @@
 package org.easyrules.core;
 
 import org.easyrules.api.Rule;
+import org.easyrules.exceptions.RuleLogicalConnectionFormatException;
+import org.easyrules.exceptions.RuleNameNotFoundInLogicalConnectionException;
+import org.slf4j.Logger;
 
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.Stack;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.easyrules.core.RuleProxy.asRule;
+import static org.slf4j.LoggerFactory.getLogger;
 
 /**
  * Class representing a composite rule composed of a set of rules.
@@ -42,12 +52,21 @@ import static org.easyrules.core.RuleProxy.asRule;
  */
 public class CompositeRule extends BasicRule {
 
+    private static final Logger LOG = getLogger(CompositeRule.class);
+    /**
+     * Leverage the jdk javascript engine to evaluate a string logical expression
+     */
+    private static final ScriptEngineManager SCRIPT_ENGINE_MANAGER = new ScriptEngineManager();
+    private static final ScriptEngine SCRIPT_ENGINE = SCRIPT_ENGINE_MANAGER.getEngineByName("nashorn");
+
     /**
      * The set of composing rules.
      */
     protected Set<Rule> rules;
 
     protected Map<Object, Rule> proxyRules;
+
+    protected String logicalConjunction;
 
     /**
      * Create a new {@link CompositeRule}.
@@ -89,20 +108,118 @@ public class CompositeRule extends BasicRule {
     }
 
     /**
-     * A composite rule is triggered if <strong>ALL</strong> conditions of all composing rules are evaluated to true.
+     * A composite rule is triggered if the object's logical connection expression is evaluated to true.
      * @return true if <strong>ALL</strong> conditions of composing rules are evaluated to true
      */
     @Override
     public boolean evaluate() {
-        if (!rules.isEmpty()) {
-            for (Rule rule : rules) {
-                if (!rule.evaluate()) {
+        boolean result = false;
+        try {
+            validateLogicalConnectionFormat(logicalConjunction);
+            if (!rules.isEmpty()) {
+                Map<String, Boolean> resultRuleMap = new HashMap<>();
+                for (Rule rule : rules) {
+                    resultRuleMap.put(rule.getName(), rule.evaluate());
+                }
+                if (logicalConjunction == null || logicalConjunction.isEmpty()) {
+                    result = !resultRuleMap.containsValue(false);
+                } else {
+                    String evalLogicalConnection = prepareExpression(resultRuleMap, logicalConjunction);
+                    result = (Boolean) SCRIPT_ENGINE.eval(evalLogicalConnection);
+                }
+            }
+        } catch (RuleLogicalConnectionFormatException e) {
+            LOG.error(e.getMessage());
+        } catch (RuleNameNotFoundInLogicalConnectionException e) {
+            LOG.error(e.getMessage());
+        } catch (ScriptException e) {
+            LOG.error("Something happened with the javascript engine. Returning false.");
+            e.printStackTrace();
+        }
+        return result;
+    }
+
+    /**
+     * Takes as input a logical connection string with the rules names, and replaces
+     * each rule name with its evaluation outcome.
+     * Example: <br>
+     * &#09;input: [myRule] && ([yourRule] || [herRule])<br>
+     * &#09;output: true && (false || true)<br>
+     *
+     * @param rulesEvalResultMap The rule_name - rule_evaluation map
+     * @param logicalConnection  The logical connection string
+     * @return The logicalConjunction string with the replaced boolean values
+     * @throws RuleNameNotFoundInLogicalConnectionException If a rule name in the logicalConjunction string is not found in the rulesEvalResultMap.
+     */
+    private String prepareExpression(Map<String, Boolean> rulesEvalResultMap, String logicalConnection) throws RuleNameNotFoundInLogicalConnectionException {
+        Pattern pattern = Pattern.compile("\\[(.+?)\\]");
+        Matcher matcher = pattern.matcher(logicalConnection);
+        StringBuilder builder = new StringBuilder();
+        int i = 0, countMatches = 0;
+        while (matcher.find()) {
+            countMatches++;
+            String name = matcher.group(1);
+            Object replacement = rulesEvalResultMap.get(name);
+            if (replacement == null) {
+                throw new RuleNameNotFoundInLogicalConnectionException(String.format("Rule named {%s} not found in logical connection string. Returning false.", name));
+            }
+            builder.append(logicalConnection.substring(i, matcher.start()));
+            builder.append(replacement.toString());
+            i = matcher.end();
+        }
+        builder.append(logicalConnection.substring(i, logicalConnection.length()));
+        return builder.toString();
+    }
+
+    /**
+     * Validates that the desired logical connection of rules, has a valid format.
+     * Sample valid format examples:
+     * <ul>
+     * <li>[myRule] && ([yourRule] || [herRule])</li>
+     * <li>[myRule] || [yourRule] || [herRule]</li>
+     * <li>([myRule] || [yourRule]) && [herRule]</li>
+     * </ul>
+     *
+     * @param logicalConnection The desired logical connection of rules.
+     * @throws RuleLogicalConnectionFormatException If the format is invalid this exception is thrown
+     */
+    private void validateLogicalConnectionFormat(String logicalConnection) throws RuleLogicalConnectionFormatException {
+        String format = "(\\(?\\[(.+?)\\]\\)?)(\\s(&&|\\|\\|)\\s)?";
+        if ( logicalConnection != null && (!logicalConnection.matches(format) || !balancedParenthensies(logicalConnection))) {
+            throw new RuleLogicalConnectionFormatException(String.format("Logical connection format {%s} is invalid. Returning false.", logicalConnection));
+        }
+    }
+
+    private boolean balancedParenthensies(String s) {
+        Stack<Character> stack = new Stack<Character>();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '[' || c == '(' || c == '{') {
+                stack.push(c);
+            } else if (c == ']') {
+                if (stack.isEmpty()) {
+                    return false;
+                }
+                if (stack.pop() != '[') {
+                    return false;
+                }
+            } else if (c == ')') {
+                if (stack.isEmpty()) {
+                    return false;
+                }
+                if (stack.pop() != '(') {
+                    return false;
+                }
+            } else if (c == '}') {
+                if (stack.isEmpty()) {
+                    return false;
+                }
+                if (stack.pop() != '{') {
                     return false;
                 }
             }
-            return true;
         }
-        return false;
+        return stack.isEmpty();
     }
 
     /**
@@ -139,4 +256,18 @@ public class CompositeRule extends BasicRule {
         }
     }
 
+    /**
+     * Sets the desired logical connection of rules. Each rule here is represented by it's name, eclosed in square brackets.
+     * Sample valid format examples:
+     * <ul>
+     * <li>[myRuleName] && ([yourRuleName] || [herRuleName])</li>
+     * <li>[myRuleName] || [yourRuleName] || [herRuleName]</li>
+     * <li>([myRuleName] || [yourRuleName]) && [herRuleName]</li>
+     * </ul>
+     *
+     * @param logicalConjunction The desired logical connection of rules.
+     */
+    public void setLogicalConjunction(String logicalConjunction) {
+        this.logicalConjunction = logicalConjunction;
+    }
 }
