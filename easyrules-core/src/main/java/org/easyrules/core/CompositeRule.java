@@ -52,7 +52,7 @@ import static org.slf4j.LoggerFactory.getLogger;
  */
 public class CompositeRule extends BasicRule {
 
-    private static final Logger LOG = getLogger(CompositeRule.class);
+    private static final Logger LOGGER = getLogger(CompositeRule.class);
     /**
      * Leverage the jdk javascript engine to evaluate a string logical expression
      */
@@ -129,11 +129,11 @@ public class CompositeRule extends BasicRule {
                 }
             }
         } catch (RuleLogicalConnectionFormatException e) {
-            LOG.error(e.getMessage());
+            LOGGER.error(e.getMessage());
         } catch (RuleNameNotFoundInLogicalConnectionException e) {
-            LOG.error(e.getMessage());
+            LOGGER.error(e.getMessage());
         } catch (ScriptException e) {
-            LOG.error("Something happened with the javascript engine. Returning false.");
+            LOGGER.error("Something happened with the javascript engine. Returning false.");
             e.printStackTrace();
         }
         return result;
@@ -155,9 +155,8 @@ public class CompositeRule extends BasicRule {
         Pattern pattern = Pattern.compile("\\[(.+?)\\]");
         Matcher matcher = pattern.matcher(logicalConnection);
         StringBuilder builder = new StringBuilder();
-        int i = 0, countMatches = 0;
+        int i = 0;
         while (matcher.find()) {
-            countMatches++;
             String name = matcher.group(1);
             Object replacement = rulesEvalResultMap.get(name);
             if (replacement == null) {
